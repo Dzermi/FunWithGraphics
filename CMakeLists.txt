@@ -43,7 +43,8 @@ FetchContent_MakeAvailable(stb)
 find_package(OpenGL REQUIRED)
 
 # 5. Plik wykonywalny
-add_executable(Grafika src/main.cpp)
+add_executable(Grafika src/main.cpp
+        src/FileDialog.cpp)
 
 target_link_libraries(Grafika PRIVATE
     sfml-graphics
@@ -51,6 +52,7 @@ target_link_libraries(Grafika PRIVATE
     sfml-system
     ImGui-SFML::ImGui-SFML
     OpenGL::GL
+    comdlg32
 )
 
 if(WIN32)

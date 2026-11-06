@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <string>
 
+#include "FileDialog.h"
+#include <cstring>
+
 #include "Rectangle.h"
 #include "Circle.h"
 #include "Line.h"
@@ -170,7 +173,18 @@ int main() {
             // ==================== ZAKŁADKA 1: FORMATY RASTROWE (PPM) ====================
             if (ImGui::BeginTabItem("Formaty PPM")) {
                 ImGui::Text("Ladowanie plikow PPM (P3 i P6):");
-                ImGui::InputText("Sciezka pliku", ppmPathBuffer, sizeof(ppmPathBuffer));
+            // Pole tekstowe zajmuje dostępną szerokość pomniejszoną o przycisk
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 110.f);
+                ImGui::InputText("##ppmPath", ppmPathBuffer, sizeof(ppmPathBuffer));
+
+                ImGui::SameLine();
+                if (ImGui::Button("Przegladaj...")) {
+                    std::string selected = FileDialog::OpenFile("Pliki PPM (*.ppm)\0*.ppm\0Wszystkie pliki (*.*)\0*.*\0");
+                    if (!selected.empty()) {
+                        std::strncpy(ppmPathBuffer, selected.c_str(), sizeof(ppmPathBuffer) - 1);
+                        ppmPathBuffer[sizeof(ppmPathBuffer) - 1] = '\0';
+                    }
+                }
 
                 if (ImGui::Button("Wczytaj plik PPM")) {
                     std::string err = PpmLoader::Load(ppmPathBuffer, currentRaster);
