@@ -33,6 +33,12 @@ FetchContent_Declare(ImGui-SFML
 )
 FetchContent_MakeAvailable(ImGui-SFML)
 
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(stb)
+
 # 4. OpenGL
 find_package(OpenGL REQUIRED)
 

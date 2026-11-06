@@ -6,12 +6,14 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
-#include <iostream>
+#include <string>
 
 #include "Rectangle.h"
 #include "Circle.h"
 #include "Line.h"
 #include "SceneSerializer.h"
+#include "RasterImage.h"
+#include "PpmLoader.h"
 
 enum class EditorMode {
     SelectAndMove,
@@ -23,37 +25,43 @@ enum class EditorMode {
 int main() {
     sf::ContextSettings settings;
     settings.antialiasingLevel = 8;
-    sf::RenderWindow window(sf::VideoMode(1100, 750), "Edytor Wektorowy - ImGui", sf::Style::Default, settings);
+    sf::RenderWindow window(sf::VideoMode(1200, 800), "Edytor Graficzny - Wektory i Formaty PPM", sf::Style::Default, settings);
     window.setFramerateLimit(60);
 
     if (!ImGui::SFML::Init(window)) {
         return -1;
     }
 
+    // --- STAN DLA EDYTORA WEKTOROWEGO ---
     std::vector<std::unique_ptr<Shape>> shapes;
-    shapes.push_back(std::make_unique<Rectangle>(400.f, 200.f, 160.f, 110.f));
-
     EditorMode currentMode = EditorMode::SelectAndMove;
-
-    // Stan zaznaczenia i interakcji
     Shape* selectedShape = nullptr;
     bool isDraggingShape = false;
-    int activeControlPoint = -1; // -1 oznacza brak złapanego uchwytu
+    int activeControlPoint = -1;
     sf::Vector2f lastMousePos;
 
-    // Rysowanie myszą
     bool isDrawing = false;
     sf::Vector2f startPoint;
     std::unique_ptr<Shape> previewShape = nullptr;
 
-    // Pola formularza dodawania nowego obiektu
-    float rectInput[4] = { 200.f, 200.f, 120.f, 80.f };
-    float circleInput[3] = { 450.f, 200.f, 50.f };
-    float lineInput[4] = { 200.f, 400.f, 450.f, 450.f };
-
+    float rectInput[4] = { 400.f, 200.f, 150.f, 100.f };
+    float circleInput[3] = { 600.f, 250.f, 60.f };
+    float lineInput[4] = { 400.f, 450.f, 700.f, 500.f };
     char filenameBuffer[128] = "scena.txt";
-    std::string statusMessage = "";
-    
+    std::string vectorStatusMessage = "";
+
+    // --- STAN DLA PRZEGLĄDARKI PPM ---
+    RasterImage currentRaster;
+    sf::Texture rasterTexture;
+    sf::Sprite rasterSprite;
+    bool hasRasterLoaded = false;
+    char ppmPathBuffer[256] = "test_p3.ppm";
+    std::string ppmStatusMessage = "";
+    bool ppmLoadError = false;
+
+    // Pozycja wyświetlania obrazu rastrowego
+    rasterSprite.setPosition(380.f, 40.f);
+
     sf::Clock deltaClock;
 
     while (window.isOpen()) {
@@ -69,7 +77,7 @@ int main() {
                 continue;
             }
 
-            // 1. WCIŚNIĘCIE LEWEGO PRZYCISKU MYSZY
+            // Obsługa myszy dla wektorów
             if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
                 sf::Vector2f mousePos = window.mapPixelToCoords(
                     sf::Vector2i(event.mouseButton.x, event.mouseButton.y)
@@ -79,7 +87,6 @@ int main() {
                     activeControlPoint = -1;
                     isDraggingShape = false;
 
-                    // Najpierw sprawdzamy, czy kliknięto w uchwyt (punkt charakterystyczny) już zaznaczonej figury
                     if (selectedShape != nullptr) {
                         int hitPt = selectedShape->GetHitControlPointIndex(mousePos.x, mousePos.y);
                         if (hitPt != -1) {
@@ -87,7 +94,6 @@ int main() {
                         }
                     }
 
-                    // Jeśli nie kliknięto w uchwyt, sprawdzamy, czy trafiono w jakąś figurę
                     if (activeControlPoint == -1) {
                         selectedShape = nullptr;
                         for (auto it = shapes.rbegin(); it != shapes.rend(); ++it) {
@@ -106,7 +112,6 @@ int main() {
                 }
             }
 
-            // 2. RUCH MYSZY
             if (event.type == sf::Event::MouseMoved) {
                 sf::Vector2f currentMousePos = window.mapPixelToCoords(
                     sf::Vector2i(event.mouseMove.x, event.mouseMove.y)
@@ -114,10 +119,8 @@ int main() {
 
                 if (currentMode == EditorMode::SelectAndMove) {
                     if (selectedShape != nullptr && activeControlPoint != -1) {
-                        // Zmiana rozmiaru / kształtu za pomocą uchwytu
                         selectedShape->MoveControlPoint(activeControlPoint, currentMousePos);
                     } else if (selectedShape != nullptr && isDraggingShape) {
-                        // Przesuwanie całego obiektu
                         float deltaX = currentMousePos.x - lastMousePos.x;
                         float deltaY = currentMousePos.y - lastMousePos.y;
                         selectedShape->Move(deltaX, deltaY);
@@ -141,7 +144,6 @@ int main() {
                 }
             }
 
-            // 3. ZWOLNIENIE PRZYCISKU MYSZY
             if (event.type == sf::Event::MouseButtonReleased && event.mouseButton.button == sf::Mouse::Left) {
                 if (currentMode == EditorMode::SelectAndMove) {
                     isDraggingShape = false;
@@ -160,101 +162,134 @@ int main() {
         ImGui::SFML::Update(window, deltaClock.restart());
 
         ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(330.f, 580.f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(350.f, 720.f), ImGuiCond_FirstUseEver);
 
-        ImGui::Begin("Panel Sterowania");
+        ImGui::Begin("Sterowanie Projektem");
 
-        ImGui::Text("Narzedzia myszy:");
-        int modeInt = static_cast<int>(currentMode);
-        ImGui::RadioButton("Zaznacz / Przesun / Skaluj", &modeInt, 0);
-        ImGui::RadioButton("Rysuj Prostokat", &modeInt, 1);
-        ImGui::RadioButton("Rysuj Okrag", &modeInt, 2);
-        ImGui::RadioButton("Rysuj Linie", &modeInt, 3);
-        currentMode = static_cast<EditorMode>(modeInt);
+        if (ImGui::BeginTabBar("MainTabs")) {
+            // ==================== ZAKŁADKA 1: FORMATY RASTROWE (PPM) ====================
+            if (ImGui::BeginTabItem("Formaty PPM")) {
+                ImGui::Text("Ladowanie plikow PPM (P3 i P6):");
+                ImGui::InputText("Sciezka pliku", ppmPathBuffer, sizeof(ppmPathBuffer));
 
-        ImGui::Separator();
+                if (ImGui::Button("Wczytaj plik PPM")) {
+                    std::string err = PpmLoader::Load(ppmPathBuffer, currentRaster);
+                    if (err.empty() && currentRaster.isValid()) {
+                        ppmLoadError = false;
+                        ppmStatusMessage = "Zaladowano: " + std::to_string(currentRaster.width) + "x" +
+                                           std::to_string(currentRaster.height) + ", MaxVal: " +
+                                           std::to_string(currentRaster.maxColorValue);
 
-        // --- EDYCJA ZAZNACZONEGO OBIEKTU ---
-        ImGui::Text("Edycja zaznaczonego obiektu:");
-        if (selectedShape != nullptr) {
-            selectedShape->RenderInspectorUI();
+                        // Tworzenie i aktualizacja tekstury w pamięci karty graficznej
+                        if (rasterTexture.create(currentRaster.width, currentRaster.height)) {
+                            rasterTexture.update(currentRaster.pixels.data());
+                            rasterSprite.setTexture(rasterTexture, true);
+                            hasRasterLoaded = true;
+                        } else {
+                            ppmLoadError = true;
+                            ppmStatusMessage = "Blad: Nie udalo sie utworzyc tekstury SFML.";
+                        }
+                    } else {
+                        ppmLoadError = true;
+                        ppmStatusMessage = err.empty() ? "Blad: Nieznany blad wczytywania." : err;
+                        hasRasterLoaded = false;
+                    }
+                }
 
-            if (ImGui::Button("Usun zaznaczony obiekt")) {
-                shapes.erase(
-                    std::remove_if(shapes.begin(), shapes.end(),
-                        [selectedShape](const std::unique_ptr<Shape>& s) { return s.get() == selectedShape; }),
-                    shapes.end()
-                );
-                selectedShape = nullptr;
+                ImGui::Separator();
+
+                // Komunikaty statusu / błędu
+                if (!ppmStatusMessage.empty()) {
+                    if (ppmLoadError) {
+                        ImGui::TextColored(ImVec4(1.f, 0.3f, 0.3f, 1.f), "%s", ppmStatusMessage.c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(0.3f, 1.f, 0.4f, 1.f), "%s", ppmStatusMessage.c_str());
+                    }
+                }
+
+                if (hasRasterLoaded) {
+                    ImGui::Spacing();
+                    ImGui::Text("Szczegoly obrazu:");
+                    ImGui::BulletText("Szerokosc: %d px", currentRaster.width);
+                    ImGui::BulletText("Wysokosc: %d px", currentRaster.height);
+                    ImGui::BulletText("Zrodlowy MaxVal: %d", currentRaster.maxColorValue);
+                    ImGui::BulletText("Skalowanie liniowe do 8-bit: Aktywne");
+                }
+
+                ImGui::EndTabItem();
             }
-        } else {
-            ImGui::TextDisabled("Brak zaznaczenia (kliknij na figure)");
-        }
 
-        ImGui::Separator();
+            // ==================== ZAKŁADKA 2: EDYTOR WEKTOROWY ====================
+            if (ImGui::BeginTabItem("Edytor Wektorowy")) {
+                ImGui::Text("Narzedzia myszy:");
+                int modeInt = static_cast<int>(currentMode);
+                ImGui::RadioButton("Zaznacz / Przesun / Skaluj", &modeInt, 0);
+                ImGui::RadioButton("Rysuj Prostokat", &modeInt, 1);
+                ImGui::RadioButton("Rysuj Okrag", &modeInt, 2);
+                ImGui::RadioButton("Rysuj Linie", &modeInt, 3);
+                currentMode = static_cast<EditorMode>(modeInt);
 
-        // --- DODAWANIE NOWYCH OBIEKTÓW Z PÓL TEKSTOWYCH ---
-        if (ImGui::CollapsingHeader("Dodaj Prostokat")) {
-            ImGui::InputFloat2("X, Y##rect", &rectInput[0]);
-            ImGui::InputFloat2("W, H##rect", &rectInput[2]);
-            if (ImGui::Button("Wstaw Prostokat")) {
-                shapes.push_back(std::make_unique<Rectangle>(rectInput[0], rectInput[1], rectInput[2], rectInput[3]));
-                selectedShape = shapes.back().get();
+                ImGui::Separator();
+
+                if (selectedShape != nullptr) {
+                    selectedShape->RenderInspectorUI();
+                    if (ImGui::Button("Usun zaznaczony obiekt")) {
+                        shapes.erase(
+                            std::remove_if(shapes.begin(), shapes.end(),
+                                [selectedShape](const std::unique_ptr<Shape>& s) { return s.get() == selectedShape; }),
+                            shapes.end()
+                        );
+                        selectedShape = nullptr;
+                    }
+                } else {
+                    ImGui::TextDisabled("Brak zaznaczenia");
+                }
+
+                ImGui::Separator();
+
+                if (ImGui::CollapsingHeader("Dodaj Prostokat")) {
+                    ImGui::InputFloat2("X, Y##rect", &rectInput[0]);
+                    ImGui::InputFloat2("W, H##rect", &rectInput[2]);
+                    if (ImGui::Button("Wstaw Prostokat")) {
+                        shapes.push_back(std::make_unique<Rectangle>(rectInput[0], rectInput[1], rectInput[2], rectInput[3]));
+                        selectedShape = shapes.back().get();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Dodaj Okrag")) {
+                    ImGui::InputFloat2("X, Y##circ", &circleInput[0]);
+                    ImGui::InputFloat("Promien##circ", &circleInput[2]);
+                    if (ImGui::Button("Wstaw Okrag")) {
+                        shapes.push_back(std::make_unique<Circle>(circleInput[0], circleInput[1], circleInput[2]));
+                        selectedShape = shapes.back().get();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Dodaj Linie")) {
+                    ImGui::InputFloat2("X1, Y1##line", &lineInput[0]);
+                    ImGui::InputFloat2("X2, Y2##line", &lineInput[2]);
+                    if (ImGui::Button("Wstaw Linie")) {
+                        shapes.push_back(std::make_unique<Line>(lineInput[0], lineInput[1], lineInput[2], lineInput[3]));
+                        selectedShape = shapes.back().get();
+                    }
+                }
+
+                ImGui::Separator();
+
+                ImGui::InputText("Plik sceny", filenameBuffer, sizeof(filenameBuffer));
+                if (ImGui::Button("Zapisz scene")) {
+                    SceneSerializer::SaveToFile(filenameBuffer, shapes);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Wczytaj scene")) {
+                    selectedShape = nullptr;
+                    SceneSerializer::LoadFromFile(filenameBuffer, shapes);
+                }
+
+                ImGui::EndTabItem();
             }
-        }
 
-        if (ImGui::CollapsingHeader("Dodaj Okrag")) {
-            ImGui::InputFloat2("X, Y##circ", &circleInput[0]);
-            ImGui::InputFloat("Promien##circ", &circleInput[2]);
-            if (ImGui::Button("Wstaw Okrag")) {
-                shapes.push_back(std::make_unique<Circle>(circleInput[0], circleInput[1], circleInput[2]));
-                selectedShape = shapes.back().get();
-            }
-        }
-
-        if (ImGui::CollapsingHeader("Dodaj Linie")) {
-            ImGui::InputFloat2("X1, Y1##line", &lineInput[0]);
-            ImGui::InputFloat2("X2, Y2##line", &lineInput[2]);
-            if (ImGui::Button("Wstaw Linie")) {
-                shapes.push_back(std::make_unique<Line>(lineInput[0], lineInput[1], lineInput[2], lineInput[3]));
-                selectedShape = shapes.back().get();
-            }
-        }
-
-       ImGui::Separator();
-
-        // --- SERIALIZACJA (ZAPIS I ODCZYT) ---
-        ImGui::Text("Zapis / Odczyt sceny:");
-        ImGui::InputText("Plik", filenameBuffer, sizeof(filenameBuffer));
-
-        if (ImGui::Button("Zapisz do pliku")) {
-            if (SceneSerializer::SaveToFile(filenameBuffer, shapes)) {
-                statusMessage = "Zapisano pomyslnie do: " + std::string(filenameBuffer);
-            } else {
-                statusMessage = "Blad zapisu pliku!";
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Wczytaj z pliku")) {
-            selectedShape = nullptr; // Resetujemy wskaźnik przed podmianą wektora!
-            isDraggingShape = false;
-            activeControlPoint = -1;
-
-            if (SceneSerializer::LoadFromFile(filenameBuffer, shapes)) {
-                statusMessage = "Wczytano obiektow: " + std::to_string(shapes.size());
-            } else {
-                statusMessage = "Blad odczytu pliku!";
-            }
-        }
-
-        if (ImGui::Button("Wyczysc cala plansze")) {
-            selectedShape = nullptr;
-            shapes.clear();
-            statusMessage = "Plansza wyczyszczona.";
-        }
-
-        if (!statusMessage.empty()) {
-            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1.f), "%s", statusMessage.c_str());
+            ImGui::EndTabBar();
         }
 
         ImGui::End();
@@ -262,15 +297,18 @@ int main() {
         // --- RENDEROWANIE ---
         window.clear(sf::Color(30, 30, 30));
 
+        // Jeśli załadowano obraz rastrowy, rysujemy go
+        if (hasRasterLoaded) {
+            window.draw(rasterSprite);
+        }
+
+        // Rysowanie figur wektorowych
         for (const auto& shape : shapes) {
             shape->Draw(window);
         }
-
         if (previewShape) {
             previewShape->Draw(window);
         }
-
-        // Rysujemy uchwyty na wierzchu zaznaczonej figury
         if (selectedShape != nullptr) {
             selectedShape->DrawControlPoints(window);
         }
