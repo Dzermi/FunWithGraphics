@@ -10,6 +10,7 @@
 
 #include "FileDialog.h"
 #include <cstring>
+#include <format>
 
 #include "Rectangle.h"
 #include "Circle.h"
@@ -63,7 +64,16 @@ int main() {
     bool ppmLoadError = false;
 
     // Pozycja wyświetlania obrazu rastrowego
-    rasterSprite.setPosition(380.f, 40.f);
+    //rasterSprite.setPosition(380.f, 40.f);
+
+    // --- STAN ZOOM I PRZESUWANIA (KAMERA) ---
+    sf::View defaultView = window.getDefaultView();
+    sf::View imageView = window.getDefaultView();
+    float zoomLevel = 1.0f; // 1.0 = 100%, 0.1 = 1000% zoom
+    bool isPanning = false;
+    sf::Vector2i panStartPixelPos;
+
+    int activeTab = 0; // 0 = PPM, 1 = Wektory
 
     sf::Clock deltaClock;
 
@@ -76,11 +86,61 @@ int main() {
                 window.close();
             }
 
+            // rozmair okna
+            if (event.type == sf::Event::Resized) {
+                defaultView.setSize(static_cast<float>(event.size.width), static_cast<float>(event.size.height));
+                defaultView.setCenter(event.size.width / 2.f, event.size.height / 2.f);
+                imageView.setSize(static_cast<float>(event.size.width) * zoomLevel, static_cast<float>(event.size.height) * zoomLevel);
+            }
+
+            // Ignorujemy zdarzenia dla płótna, jeśli mysz klika w kontrolki GUI
             if (ImGui::GetIO().WantCaptureMouse) {
                 continue;
             }
 
+            // ==================== ZDARZENIA DLA PRZEGLĄDARKI PPM ====================
+            if (activeTab == 0 && hasRasterLoaded) {
+                // 1. Zoom kółkiem myszy
+                if (event.type == sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+                    float delta = event.mouseWheelScroll.delta;
+                    sf::Vector2i mousePixel(event.mouseWheelScroll.x, event.mouseWheelScroll.y);
+                    sf::Vector2f beforeZoomWorld = window.mapPixelToCoords(mousePixel, imageView);
+
+                    float zoomFactor = (delta > 0) ? 0.85f : 1.15f;
+                    zoomLevel *= zoomFactor;
+                    zoomLevel = std::clamp(zoomLevel, 0.005f, 10.0f); // Ograniczenie min i max zoomu
+
+                    imageView.setSize(window.getSize().x * zoomLevel, window.getSize().y * zoomLevel);
+
+                    // Skupienie zoomu wokół punktu kursora myszy
+                    sf::Vector2f afterZoomWorld = window.mapPixelToCoords(mousePixel, imageView);
+                    imageView.move(beforeZoomWorld - afterZoomWorld);
+                }
+
+                // 2. Rozpoczęcie przesuwania (Prawy przycisk myszy lub Środkowy)
+                if (event.type == sf::Event::MouseButtonPressed && 
+                   (event.mouseButton.button == sf::Mouse::Right || event.mouseButton.button == sf::Mouse::Middle)) {
+                    isPanning = true;
+                    panStartPixelPos = sf::Vector2i(event.mouseButton.x, event.mouseButton.y);
+                }
+
+                // 3. Koniec przesuwania
+                if (event.type == sf::Event::MouseButtonReleased && 
+                   (event.mouseButton.button == sf::Mouse::Right || event.mouseButton.button == sf::Mouse::Middle)) {
+                    isPanning = false;
+                }
+
+                // 4. Ruch myszą przy przesuwaniu (Pan)
+                if (event.type == sf::Event::MouseMoved && isPanning) {
+                    sf::Vector2i currentPixelPos(event.mouseMove.x, event.mouseMove.y);
+                    sf::Vector2f delta = window.mapPixelToCoords(panStartPixelPos, imageView) - 
+                                         window.mapPixelToCoords(currentPixelPos, imageView);
+                    imageView.move(delta);
+                    panStartPixelPos = currentPixelPos;
+                }
+            }
             // Obsługa myszy dla wektorów
+            if (activeTab == 1) {
             if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
                 sf::Vector2f mousePos = window.mapPixelToCoords(
                     sf::Vector2i(event.mouseButton.x, event.mouseButton.y)
@@ -161,6 +221,8 @@ int main() {
                 }
             }
         }
+    }
+    
 
         ImGui::SFML::Update(window, deltaClock.restart());
 
@@ -172,6 +234,7 @@ int main() {
         if (ImGui::BeginTabBar("MainTabs")) {
             // ==================== ZAKŁADKA 1: FORMATY RASTROWE (PPM) ====================
             if (ImGui::BeginTabItem("Formaty PPM")) {
+                activeTab = 0;
                 ImGui::Text("Ladowanie plikow PPM (P3 i P6):");
             // Pole tekstowe zajmuje dostępną szerokość pomniejszoną o przycisk
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 110.f);
@@ -186,7 +249,7 @@ int main() {
                     }
                 }
 
-                if (ImGui::Button("Wczytaj plik PPM")) {
+                if (ImGui::Button("Wczytaj plik PPM",ImVec2(-1, 0))) {
                     std::string err = PpmLoader::Load(ppmPathBuffer, currentRaster);
                     if (err.empty() && currentRaster.isValid()) {
                         ppmLoadError = false;
@@ -195,13 +258,16 @@ int main() {
                                            std::to_string(currentRaster.maxColorValue);
 
                         // Tworzenie i aktualizacja tekstury w pamięci karty graficznej
-                        if (rasterTexture.create(currentRaster.width, currentRaster.height)) {
+                       if (rasterTexture.create(currentRaster.width, currentRaster.height)) {
                             rasterTexture.update(currentRaster.pixels.data());
                             rasterSprite.setTexture(rasterTexture, true);
+                            rasterSprite.setPosition(0.f, 0.f);
                             hasRasterLoaded = true;
-                        } else {
-                            ppmLoadError = true;
-                            ppmStatusMessage = "Blad: Nie udalo sie utworzyc tekstury SFML.";
+
+                            // Reset kamery i wyśrodkowanie na załadowanym obrazku
+                            zoomLevel = 1.0f;
+                            imageView.setSize(window.getSize().x, window.getSize().y);
+                            imageView.setCenter(currentRaster.width / 2.f, currentRaster.height / 2.f);
                         }
                     } else {
                         ppmLoadError = true;
@@ -228,6 +294,12 @@ int main() {
                     ImGui::BulletText("Wysokosc: %d px", currentRaster.height);
                     ImGui::BulletText("Zrodlowy MaxVal: %d", currentRaster.maxColorValue);
                     ImGui::BulletText("Skalowanie liniowe do 8-bit: Aktywne");
+                    
+                    if (ImGui::Button("Reset widoku kamery")) {
+                        zoomLevel = 1.0f;
+                        imageView.setSize(window.getSize().x, window.getSize().y);
+                        imageView.setCenter(currentRaster.width / 2.f, currentRaster.height / 2.f);
+                    }
                 }
 
                 ImGui::EndTabItem();
@@ -235,6 +307,9 @@ int main() {
 
             // ==================== ZAKŁADKA 2: EDYTOR WEKTOROWY ====================
             if (ImGui::BeginTabItem("Edytor Wektorowy")) {
+                activeTab = 1;
+
+
                 ImGui::Text("Narzedzia myszy:");
                 int modeInt = static_cast<int>(currentMode);
                 ImGui::RadioButton("Zaznacz / Przesun / Skaluj", &modeInt, 0);
@@ -312,10 +387,66 @@ int main() {
         window.clear(sf::Color(30, 30, 30));
 
         // Jeśli załadowano obraz rastrowy, rysujemy go
-        if (hasRasterLoaded) {
+        if (activeTab == 0 && hasRasterLoaded) {
+            // Ustawiamy kamerę dla obrazu rastrowego
+            window.setView(imageView);
             window.draw(rasterSprite);
-        }
 
+            // Wyznaczamy widoczny obszar świata (współrzędne pikseli obrazka)
+            sf::Vector2f topLeft = window.mapPixelToCoords(sf::Vector2i(0, 0), imageView);
+            sf::Vector2f bottomRight = window.mapPixelToCoords(sf::Vector2i(window.getSize().x, window.getSize().y), imageView);
+
+            int startX = std::max(0, static_cast<int>(std::floor(topLeft.x)));
+            int endX = std::min(currentRaster.width, static_cast<int>(std::ceil(bottomRight.x)));
+            int startY = std::max(0, static_cast<int>(std::floor(topLeft.y)));
+            int endY = std::min(currentRaster.height, static_cast<int>(std::ceil(bottomRight.y)));
+
+            // Obliczamy rozmiar 1 piksela obrazka w pikselach ekranu
+            sf::Vector2i screenP0 = window.mapCoordsToPixel(sf::Vector2f(0.f, 0.f), imageView);
+            sf::Vector2i screenP1 = window.mapCoordsToPixel(sf::Vector2f(1.f, 1.f), imageView);
+            float pixelScreenSize = static_cast<float>(screenP1.x - screenP0.x);
+
+            // Jeśli piksel jest odpowiednio duży na ekranie (np. >= 45 px) - rysujemy siatkę i wartości RGB
+            if (pixelScreenSize >= 45.f) {
+                ImDrawList* drawList = ImGui::GetForegroundDrawList();
+
+                for (int y = startY; y < endY; ++y) {
+                    for (int x = startX; x < endX; ++x) {
+                        sf::Vector2i pTopLeft = window.mapCoordsToPixel(sf::Vector2f(static_cast<float>(x), static_cast<float>(y)), imageView);
+                        sf::Vector2i pBottomRight = window.mapCoordsToPixel(sf::Vector2f(static_cast<float>(x + 1), static_cast<float>(y + 1)), imageView);
+
+                        // Siatka wokół piksela (delikatna czarna/ciemnoszara ramka)
+                        drawList->AddRect(
+                            ImVec2(static_cast<float>(pTopLeft.x), static_cast<float>(pTopLeft.y)),
+                            ImVec2(static_cast<float>(pBottomRight.x), static_cast<float>(pBottomRight.y)),
+                            IM_COL32(0, 0, 0, 100)
+                        );
+
+                        // Pobranie koloru piksela
+                        sf::Color c = currentRaster.getPixel(x, y);
+
+                        // Dobór koloru tekstu (biały na ciemnym tle, czarny na jasnym tle)
+                        float luminance = 0.299f * c.r + 0.587f * c.g + 0.114f * c.b;
+                        ImU32 textColor = (luminance > 140.f) ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+
+                        std::string rStr = std::format("R:{}", c.r);
+                        std::string gStr = std::format("G:{}", c.g);
+                        std::string bStr = std::format("B:{}", c.b);
+
+                        float textStartX = static_cast<float>(pTopLeft.x) + 4.f;
+                        float textStartY = static_cast<float>(pTopLeft.y) + 4.f;
+
+                        // Wypisanie R, G, B w 3 linijkach
+                        drawList->AddText(ImVec2(textStartX, textStartY), textColor, rStr.c_str());
+                        drawList->AddText(ImVec2(textStartX, textStartY + 14.f), textColor, gStr.c_str());
+                        drawList->AddText(ImVec2(textStartX, textStartY + 28.f), textColor, bStr.c_str());
+                    }
+                }
+            }
+
+            // Przywracamy domyślny widok okna dla GUI i wektorów
+            window.setView(defaultView);
+        } else if (activeTab == 1) {
         // Rysowanie figur wektorowych
         for (const auto& shape : shapes) {
             shape->Draw(window);
@@ -326,7 +457,7 @@ int main() {
         if (selectedShape != nullptr) {
             selectedShape->DrawControlPoints(window);
         }
-
+    }
         ImGui::SFML::Render(window);
         window.display();
     }

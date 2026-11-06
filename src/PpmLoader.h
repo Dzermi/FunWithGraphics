@@ -3,7 +3,6 @@
 #include <vector>
 #include <string>
 #include <cctype>
-#include <cmath>
 #include <cstdint>
 #include "RasterImage.h"
 
